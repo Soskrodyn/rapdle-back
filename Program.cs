@@ -17,7 +17,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend",
-        p => p.WithOrigins("http://localhost:5173", "http://localhost:3000")
+        p => p.WithOrigins("http://localhost:5173", "http://localhost:3000", "https://rapdle.online")
               .AllowAnyHeader()
               .AllowAnyMethod());
 });
