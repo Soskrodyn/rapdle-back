@@ -1,0 +1,6 @@
+@Rapdle.Api_HostAddress = http://localhost:5095
+
+GET {{Rapdle.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
