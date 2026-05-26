@@ -9,6 +9,10 @@ public class DeezerService
     private static DateTime _cacheTime = DateTime.MinValue;
     private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(1);
 
+    // Pre-built schedule: date string → song
+    private static Dictionary<string, DeezerTrack>? _schedule;
+    private static DateTime _scheduleBuiltAt = DateTime.MinValue;
+
     // Deine Playlist ID (öffentlich!)
     private const string playlist_id = "15286556683"; 
 
@@ -75,7 +79,7 @@ public class DeezerService
 
             return allTracks;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // If API call fails but we have cached data, return it even if expired
             if (_cachedPlaylist != null)
@@ -86,20 +90,87 @@ public class DeezerService
         }
     }
 
-    public async Task<DeezerTrack?> GetDailySongAsync()
+    public async Task<DeezerTrack?> GetScheduledSongAsync(string date)
     {
-        var tracks = await GetPlaylistTracksAsync();
-        if (tracks.Count == 0) return null;
+        var playlist = await GetPlaylistTracksAsync();
+        if (playlist.Count == 0) return null;
 
-        // Nur Tracks mit Preview nehmen
-        var withPreview = tracks
-            .Where(t => !string.IsNullOrEmpty(t.Preview))
-            .ToList();
+        // Rebuild schedule once per day or if not built yet
+        if (_schedule == null || (DateTime.UtcNow - _scheduleBuiltAt).TotalHours > 24)
+        {
+            _schedule = BuildSchedule(playlist);
+            _scheduleBuiltAt = DateTime.UtcNow;
+        }
 
-        if (withPreview.Count == 0) return null;
+        return _schedule.TryGetValue(date, out var song) ? song : null;
+    }
 
-        var random = new Random();
-        return withPreview[random.Next(withPreview.Count)];
+    private static Dictionary<string, DeezerTrack> BuildSchedule(List<DeezerTrack> playlist)
+    {
+        var schedule = new Dictionary<string, DeezerTrack>();
+        var startDate = new DateTime(2026, 4, 1);
+        var endDate = DateTime.UtcNow.Date.AddDays(30); // Build 30 days ahead
+
+        // Track last-used date per song and per artist
+        var songLastUsed = new Dictionary<string, DateTime>();
+        var artistLastUsed = new Dictionary<string, DateTime>();
+
+        const int songCooldownDays = 200;
+        const int artistCooldownDays = 20;
+
+        var current = startDate;
+        while (current <= endDate)
+        {
+            string dateStr = current.ToString("yyyy-MM-dd");
+
+            // Build pool: songs respecting both cooldowns
+            var available = playlist.Where(t =>
+            {
+                var songKey = $"{t.Title} \u2013 {t.Artist?.Name}".ToLower();
+                var artistKey = t.Artist?.Name?.ToLower() ?? "";
+
+                if (songLastUsed.TryGetValue(songKey, out var lastSong) && (current - lastSong).Days < songCooldownDays)
+                    return false;
+
+                if (!string.IsNullOrEmpty(artistKey) &&
+                    artistLastUsed.TryGetValue(artistKey, out var lastArtist) &&
+                    (current - lastArtist).Days < artistCooldownDays)
+                    return false;
+
+                return true;
+            }).ToList();
+
+            // Fallback: relax artist cooldown only
+            if (available.Count == 0)
+            {
+                available = playlist.Where(t =>
+                {
+                    var songKey = $"{t.Title} \u2013 {t.Artist?.Name}".ToLower();
+                    return !songLastUsed.TryGetValue(songKey, out var lastSong) ||
+                           (current - lastSong).Days >= songCooldownDays;
+                }).ToList();
+            }
+
+            // Last resort
+            if (available.Count == 0)
+                available = playlist;
+
+            // Deterministic pick for this date
+            var rng = new Random(dateStr.GetHashCode());
+            var song = available[rng.Next(available.Count)];
+
+            schedule[dateStr] = song;
+
+            // Update cooldown tracking
+            songLastUsed[$"{song.Title} \u2013 {song.Artist?.Name}".ToLower()] = current;
+            var artist = song.Artist?.Name?.ToLower() ?? "";
+            if (!string.IsNullOrEmpty(artist))
+                artistLastUsed[artist] = current;
+
+            current = current.AddDays(1);
+        }
+
+        return schedule;
     }
 }
 
